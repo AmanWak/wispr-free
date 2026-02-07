@@ -6,6 +6,8 @@ Hold a key, speak, release — your words are transcribed and pasted instantly i
 
 > Inspired by [Wispr Flow](https://wisprflow.ai/) — this is a free alternative that works entirely offline.
 
+I didn't want to pay $12/mo so I made a free, jank version that runs locally.
+
 ---
 
 ## Demo
