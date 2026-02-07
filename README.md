@@ -16,10 +16,18 @@ $ python3 wispr_free.py
 🚀 Wispr Free — Hold-to-Dictate
 ==================================================
   Trigger key  : Right Option
-  Whisper model: tiny
+  Whisper model: base
   Language     : en
   Auto-paste   : on
+  Custom vocab : 3 words
+  Command API  : purdue
+
+  Hold trigger key → speak → release to transcribe & paste
+  Say "scratch that" to delete the last transcription
+  Press Ctrl+C to quit
 ==================================================
+
+📖 Custom vocabulary: Aman, FAANG, Wispr
 
 ✅ Model loaded!
 👂 Listening for Right Option key...
@@ -28,6 +36,12 @@ $ python3 wispr_free.py
 ⚙️  Transcribing...
 ✅ "Hey this is a test of the speech to text tool"
 📋 Pasted!
+
+🎤 Recording...
+⚙️  Transcribing...
+✅ "Scratch that."
+🔍 Command detected (local): delete last
+🗑️  Deleted: "Hey this is a test of the speech to text tool"
 ```
 
 ---
@@ -53,11 +67,14 @@ If no text field is focused, the text stays on your clipboard — just ⌘V wher
        │ on_release → stop mic, enqueue audio
        ▼
 ┌─────────────────────┐
-│  Worker Thread       │  ← dequeues audio, runs Whisper, pastes result
+│  Worker Thread       │  ← dequeues audio, runs Whisper, handles result
 │  (threading)        │
 └──────┬──────────────┘
        │
-       ├─→ Whisper transcribe (local, offline)
+       ├─→ Whisper transcribe (local, with custom vocab prompt)
+       ├─→ CommandDetector: is it "scratch that"?
+       │     ├─ YES (local regex or LLM API) → ⌘Z undo last paste
+       │     └─ NO → continue to paste
        ├─→ pbcopy (clipboard)
        └─→ simulated ⌘V (pynput Controller)
 ```
@@ -120,10 +137,11 @@ This uses the `tiny` model, Right Option (⌥) trigger key, English language, an
 
 ```
 python3 wispr_free.py [OPTIONS]
+python3 wispr_free.py vocab {add|remove|list|clear} [WORDS...]
 
-Options:
+Dictation Options:
   -m, --model {tiny,base,small,medium,large}
-        Whisper model size (default: tiny)
+        Whisper model size (default: base)
 
   -t, --trigger {right_option,left_option,right_cmd,left_ctrl,right_ctrl,caps_lock,f13..f20}
         Key to hold while speaking (default: right_option)
@@ -134,8 +152,23 @@ Options:
   --no-paste
         Disable auto-paste, only copy to clipboard
 
+  --api-provider {gemini,purdue,none}
+        LLM API for smart command detection (default: none)
+
+  --api-key KEY
+        API key (or use WISPR_GEMINI_API_KEY / WISPR_PURDUE_API_KEY env vars)
+
+  --api-model MODEL
+        Override default LLM model for command detection
+
   -h, --help
         Show help message
+
+Vocabulary Commands:
+  vocab add <words...>     Add custom words for better recognition
+  vocab remove <words...>  Remove custom words
+  vocab list               Show all custom words
+  vocab clear              Remove all custom words
 ```
 
 ### Examples
@@ -153,11 +186,105 @@ python3 wispr_free.py --language es
 # Japanese, medium model, clipboard only
 python3 wispr_free.py -m medium -l ja --no-paste
 
+# Enable smart command detection with Purdue GenAI Studio
+export WISPR_PURDUE_API_KEY="your-key-here"
+python3 wispr_free.py --api-provider purdue
+
+# Or with Google Gemini
+export WISPR_GEMINI_API_KEY="your-key-here"
+python3 wispr_free.py --api-provider gemini
+
 # Set up a shell alias for quick access
 echo 'alias wispr="python3 /path/to/wispr_free.py"' >> ~/.zshrc
 source ~/.zshrc
 wispr  # now just type this!
 ```
+
+---
+
+## Voice Commands ("Scratch That")
+
+Wispr Free detects voice commands like **"scratch that"** and deletes the last transcription instead of pasting it.
+
+### How it works
+
+1. You dictate → text is pasted
+2. You say "scratch that" → the last paste is **undone** (via ⌘Z)
+
+### Two detection modes
+
+**Local (always on, no API):** Exact phrase matching for common commands:
+- "scratch that", "delete that", "undo that", "undo"
+- "never mind", "remove that", "erase that", "take that back"
+- "go back", "backspace", "clear that", "oops"
+
+**API-powered (optional):** For ambiguous cases, an LLM classifies whether the text is a command or normal dictation. This catches natural variations like "oh wait, scratch that actually" that exact matching would miss.
+
+Supported APIs:
+
+| Provider | Endpoint | Model | Env Variable |
+|---|---|---|---|
+| **Purdue GenAI Studio** | `genai.rcac.purdue.edu` | `llama3.1:latest` | `WISPR_PURDUE_API_KEY` |
+| **Google Gemini** | `generativelanguage.googleapis.com` | `gemini-2.0-flash` | `WISPR_GEMINI_API_KEY` |
+
+```bash
+# Use Purdue GenAI Studio
+export WISPR_PURDUE_API_KEY="your-purdue-api-key"
+python3 wispr_free.py --api-provider purdue
+
+# Use Google Gemini
+export WISPR_GEMINI_API_KEY="your-gemini-api-key"
+python3 wispr_free.py --api-provider gemini
+
+# Or pass the key directly
+python3 wispr_free.py --api-provider purdue --api-key "your-key"
+
+# Use a different model
+python3 wispr_free.py --api-provider purdue --api-model "llama3.3:latest"
+```
+
+> **Without an API key**, only exact local phrase matching is used. This is fast and works great for straightforward commands.
+
+---
+
+## Custom Vocabulary
+
+Wispr Free lets you add custom words — names, acronyms, technical terms — that Whisper might otherwise mis-transcribe. These words are stored in `~/.wispr_free/custom_words.json` and persist across sessions.
+
+### How it works
+
+Custom words are injected into Whisper's `initial_prompt` parameter, which biases the decoder toward recognizing those tokens. This is especially useful for:
+
+- **Names:** "Aman", "Wakankar", "Satya"
+- **Acronyms:** "FAANG", "RCAC", "GenAI"
+- **Brand names:** "Wispr", "Purdue", "macOS"
+- **Technical terms:** "Kubernetes", "PostgreSQL", "NumPy"
+
+### Managing vocabulary from the terminal
+
+```bash
+# Add words
+python3 wispr_free.py vocab add "Aman" "FAANG" "Kubernetes"
+# ✅ Added: Aman, FAANG, Kubernetes
+# 📖 Current vocabulary (3): Aman, FAANG, Kubernetes
+
+# List all words
+python3 wispr_free.py vocab list
+# 📖 Custom vocabulary (3 words):
+#    • Aman
+#    • FAANG
+#    • Kubernetes
+
+# Remove specific words
+python3 wispr_free.py vocab remove "FAANG"
+# ✅ Removed: FAANG
+
+# Clear everything
+python3 wispr_free.py vocab clear
+# 🗑️  Cleared 2 word(s).
+```
+
+Words take effect immediately on the next dictation — no restart needed.
 
 ---
 
@@ -236,7 +363,17 @@ The codebase is organized into clean, modular classes so you can easily extend o
 ```
 wispr_free.py
 │
-├── Configuration         ← Model, sample rate, trigger keys, language
+├── Configuration         ← Model, sample rate, trigger keys, language, API settings
+│
+├── class CustomVocabulary ← Persistent custom words (~/.wispr_free/custom_words.json)
+│   ├── add/remove/clear()← Manage word list
+│   └── get_prompt()      ← Builds Whisper initial_prompt for vocab bias
+│
+├── class CommandDetector  ← Detects "scratch that" / "delete that" commands
+│   ├── _local_detect()   ← Fast regex matching (always on)
+│   ├── _call_gemini()    ← Google Gemini API classification
+│   ├── _call_purdue()    ← Purdue GenAI Studio API classification
+│   └── detect()          ← Returns {"action": "delete"} or None
 │
 ├── class Recorder        ← Microphone streaming (sounddevice)
 │   ├── start()           ← Opens mic InputStream with callback
@@ -244,18 +381,20 @@ wispr_free.py
 │
 ├── class Transcriber     ← Speech-to-text (Whisper)
 │   ├── load()            ← Downloads & loads model into RAM
-│   └── transcribe(audio) ← Returns text string
+│   └── transcribe(audio, initial_prompt) ← Returns text string
 │
-├── class OutputHandler   ← Clipboard + paste (pbcopy + pynput)
-│   └── deliver(text)     ← Copies to clipboard, simulates ⌘V
+├── class OutputHandler   ← Clipboard + paste + undo (pbcopy + pynput)
+│   ├── deliver(text)     ← Copies to clipboard, simulates ⌘V
+│   └── delete_last()     ← Undoes last paste via ⌘Z
 │
 ├── class WisprFree       ← Main app (wires everything together)
 │   ├── _on_press()       ← Trigger key pressed → start recording
 │   ├── _on_release()     ← Trigger key released → stop → enqueue
-│   ├── _worker()         ← Background thread: transcribe → paste
+│   ├── _worker()         ← Background: transcribe → detect command → paste/delete
 │   └── run()             ← Entry point: loads model, starts threads
 │
-└── parse_args()          ← CLI argument parsing (argparse)
+├── parse_args()          ← CLI parsing (dictation flags + vocab subcommand)
+└── handle_vocab()        ← Vocab CLI handler (add/remove/list/clear)
 ```
 
 ### Extending It
@@ -391,6 +530,9 @@ MIT — do whatever you want with it. Free as in beer, free as in speech.
 
 PRs welcome! Some ideas:
 
+- [x] Voice commands (“scratch that”) to delete last transcription
+- [x] Custom vocabulary for names, acronyms, and technical terms
+- [x] LLM-powered command detection (Gemini + Purdue GenAI Studio)
 - [ ] Linux support (`xclip` / `xdotool` backend)
 - [ ] Windows support (`pyperclip` / `pyautogui` backend)
 - [ ] System tray icon with status indicator
